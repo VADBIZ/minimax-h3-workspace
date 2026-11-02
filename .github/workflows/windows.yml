@@ -1,0 +1,79 @@
+# Builds the Windows installer from this repository on a Windows machine and attaches it to a release.
+# Run by hand (Actions -> Windows installer -> Run workflow) with the release tag to attach to.
+name: Windows installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the installer to (empty: only build and keep it as an artifact)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install aiohttp pywebview pyinstaller
+
+      - name: Smoke test from source
+        shell: pwsh
+        run: |
+          $env:H3STUDIO_DATA = "$env:RUNNER_TEMP\h3data"
+          $p = Start-Process python -ArgumentList "app/server.py","--port","8765" -PassThru -NoNewWindow
+          Start-Sleep 8
+          foreach ($u in "setup/info", "system", "agent/status", "library") {
+            $r = Invoke-RestMethod "http://127.0.0.1:8765/api/$u"
+            Write-Host "/api/$u OK"
+          }
+          $info = Invoke-RestMethod "http://127.0.0.1:8765/api/setup/info"
+          if ($info.hardware.mac) { throw "Windows detected as Mac" }
+          if ($info.hardware.ram_gb -lt 1) { throw "RAM not detected" }
+          Write-Host "RAM: $($info.hardware.ram_gb) GB, install dir: $($info.install_dir)"
+          Stop-Process $p.Id
+
+      - name: Build app (PyInstaller)
+        run: python -m PyInstaller app/build/h3studio.spec --distpath app/build/dist --workpath app/build/work --noconfirm
+
+      - name: Smoke test of the built app
+        shell: pwsh
+        run: |
+          $p = Start-Process "app/build/dist/MinimaxH3Workspace/MinimaxH3Workspace.exe" -PassThru
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep 2
+            try { Invoke-RestMethod "http://127.0.0.1:8765/api/system" | Out-Null; $ok = $true; break } catch {}
+          }
+          Stop-Process $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "The built app did not start its server" }
+          Write-Host "Built app answers on 127.0.0.1:8765"
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc app\build\h3studio.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-Item app\build\output\*.exe | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: app/build/output/Minimax.H3.Workspace-Setup.exe
+
+      - name: Attach to release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" app/build/output/Minimax.H3.Workspace-Setup.exe --clobber
