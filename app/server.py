@@ -444,7 +444,7 @@ class App:
 
     async def h_system(self, _req):
         """CPU / RAM / GPU / disk readings for the sidebar."""
-        where = self.output_dir or self.config.get("install_dir") or HOME
+        where = self.output_dir or self.config.get("install_dir") or (DATA_DIR if engine.IS_MAC else HOME)
         return web.json_response(await asyncio.to_thread(self.monitor.sample, where))
 
     # ---------- first-run setup ----------
@@ -508,6 +508,8 @@ class App:
     async def h_setup_install(self, req):
         if self.installer:
             return web.json_response({"error": "Установка уже идёт"}, status=409)
+        if engine.IS_MAC:
+            return web.json_response({"error": engine.MAC_NO_LOCAL}, status=400)
         body = await req.json()
         install_dir = str(Path(body.get("install_dir") or engine.default_install_dir()))
         models_dir = (body.get("models_dir") or "").strip() or None
@@ -1036,7 +1038,7 @@ class App:
         variant = await self.llm_variant()
         v = ag.LLM_VARIANTS[variant]
         custom = self.config.get("llm_custom")
-        vram = (self.hw or {}).get("vram_gb") or 0
+        vram = ag.gpu_memory_gb(self.hw or {})
         candidates = []
         if custom and custom.get("dir") and Path(custom["dir"]).is_dir():
             _, _, found = await asyncio.to_thread(ag.find_gguf, custom["dir"])
@@ -1096,7 +1098,7 @@ class App:
                 return web.json_response({"error": f"Папка не найдена: {folder}"}, status=400)
             found = await asyncio.to_thread(speech.locate, self.llm.root, folder)
             if not (speech._find_exe(folder) or speech._find_model(folder)):
-                return web.json_response({"error": "В папке нет ни whisper-cli.exe, ни модели ggml-*.bin "
+                return web.json_response({"error": f"В папке нет ни {speech.EXE_NAME}, ни модели ggml-*.bin "
                                                    "(нужна многоязычная модель, не «.en»)."}, status=400)
             self.config.update(whisper_dir=folder)
         return await self.h_agent_status(req)
@@ -1132,7 +1134,7 @@ class App:
                 return web.json_response({"error": f"Папка не найдена: {folder}"}, status=400)
             if self.hw is None:
                 self.hw = await asyncio.to_thread(engine.detect_hardware)
-            model, proj, models = await asyncio.to_thread(ag.find_gguf, folder, body.get("model"), self.hw.get("vram_gb"))
+            model, proj, models = await asyncio.to_thread(ag.find_gguf, folder, body.get("model"), ag.gpu_memory_gb(self.hw))
             if not model:
                 return web.json_response({"error": "В папке нет моделей .gguf. Нужна обычная Gemma в формате GGUF "
                                                    "(версия для LTX в text_encoders не подойдёт)."}, status=400)
@@ -1313,6 +1315,12 @@ def comfy_error_text(res):
 
 
 def send_to_recycle_bin(path):
+    if engine.IS_MAC:
+        # the Finder's own Trash (pyobjc comes with pywebview); "Put back" works as usual
+        from Foundation import NSFileManager, NSURL
+        ok, _, _ = NSFileManager.defaultManager().trashItemAtURL_resultingItemURL_error_(
+            NSURL.fileURLWithPath_(str(path)), None, None)
+        return bool(ok) and not path.exists()
     ps = ("Add-Type -AssemblyName Microsoft.VisualBasic; "
           "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:H3_DEL, 'OnlyErrorDialogs', 'SendToRecycleBin')")
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],

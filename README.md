@@ -1,6 +1,6 @@
 # Minimax H3 Workspace
 
-Бесплатное приложение для Windows: локальная генерация видео моделью **MiniMax H3** без знания ComfyUI.
+Бесплатное приложение для Windows и Мака: генерация видео моделью **MiniMax H3** без знания ComfyUI.
 ComfyUI работает внутри, невидимо для пользователя. Видно только простые формы, прогресс, живое превью и библиотеку готовых видео.
 
 > Неофициальный проект сообщества. Не связан с компанией MiniMax. MiniMax и H3 принадлежат их владельцам.
@@ -26,6 +26,19 @@ Windows может показать синее предупреждение, т�
 
 Нужно: Windows 10/11, видеокарта NVIDIA (от 8 ГБ, лучше 16 ГБ), 32 ГБ оперативной памяти, свободное место 40–100 ГБ в зависимости от выбранных задач.
 
+### Мак
+
+Скачайте **`Minimax.H3.Workspace-mac-arm64.dmg`**, откройте его и перетащите программу в «Программы». Нужен Мак на Apple M1–M4 и macOS 12 или новее.
+
+Программа не подписана сертификатом Apple, поэтому при первом запуске Мак скажет, что её нельзя открыть. Нажмите «Готово», откройте «Системные настройки → Конфиденциальность и безопасность» и внизу нажмите «Всё равно открыть». Это нужно один раз.
+
+Что работает на Маке:
+- **облако RunningHub** — основной режим, генерация на их серверах по вашему API-ключу;
+- **ваш ComfyUI** на другом компьютере с NVIDIA — впишите его адрес в мастере первого запуска;
+- **агент** (Gemma через llama.cpp на Metal) и распознавание речи (whisper.cpp, уже встроен в программу).
+
+Локальной генерации на самом Маке нет: модели MiniMax H3 нужна видеокарта NVIDIA, поэтому пункт «Я новичок» на Маке не показывается.
+
 ### Первый запуск: какой вариант выбрать
 
 - **«Я новичок — у меня ничего нет»**: приложение само скачает ComfyUI, ноды и модели (отметьте только нужные задачи).
@@ -44,6 +57,17 @@ python app/main.py
 ```
 
 Сборка установщика: PyInstaller (`app/build/h3studio.spec`) и Inno Setup (`app/build/h3studio.iss`).
+
+Сборка для Мака (на Маке):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install aiohttp pywebview pyinstaller
+.venv/bin/python -m PyInstaller app/build/h3studio-mac.spec --distpath app/build/dist --workpath app/build/work
+sh app/build/make-dmg.sh
+```
+
+`app/bin/whisper-cli` — статическая сборка whisper.cpp v1.9.5 (Metal, arm64 + x86_64): у whisper.cpp нет готовых бинарников для Мака.
+Собрана так: `cmake -B build -DBUILD_SHARED_LIBS=OFF -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 && cmake --build build --target whisper-cli`.
 
 ## Что скачивается и откуда
 

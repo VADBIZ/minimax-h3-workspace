@@ -7,6 +7,7 @@ downloaded by the app next to the agent's model; nothing is installed system-wid
 import asyncio
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -29,12 +30,23 @@ NOISE = re.compile(r"[\[\(][^\]\)]{0,40}[\]\)]")  # [BLANK_AUDIO], (music), [Mus
 MODEL_PREFERENCE = ["large-v3-turbo", "large-v3", "large-v2", "large", "medium", "small", "base", "tiny"]
 
 
+EXE_NAME = "whisper-cli" + engine.EXE
+# whisper.cpp publishes no Mac binaries, so the Mac app carries its own build (app/bin/whisper-cli)
+BUNDLED_EXE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "bin" / "whisper-cli"
+if engine.IS_MAC:
+    WHISPER_ZIP_SIZE = 0
+
+
 def _find_exe(folder):
     folder = Path(folder)
     if not folder.is_dir():
         return None
-    hits = [p for p in folder.rglob("whisper-cli.exe") if len(p.relative_to(folder).parts) <= 5]
+    hits = [p for p in folder.rglob(EXE_NAME) if len(p.relative_to(folder).parts) <= 5 and p.is_file()]
     return hits[0] if hits else None
+
+
+def _bundled_exe():
+    return BUNDLED_EXE if engine.IS_MAC and BUNDLED_EXE.is_file() else None
 
 
 def _find_model(folder):
@@ -56,9 +68,9 @@ def _find_model(folder):
 def locate(root, custom_dir=None):
     """Where whisper is: the user's own folder first, then the app's own one. Returns a status dict."""
     own = Path(root) / "whisper"
-    exe = (custom_dir and _find_exe(custom_dir)) or _find_exe(own / "bin")
+    exe = (custom_dir and _find_exe(custom_dir)) or _find_exe(own / "bin") or _bundled_exe()
     model = (custom_dir and _find_model(custom_dir)) or _find_model(own / "models")
-    missing = ([] if exe else ["whisper-cli.exe"]) + ([] if model else ["модель ggml-*.bin"])
+    missing = ([] if exe else [EXE_NAME]) + ([] if model else ["модель ggml-*.bin"])
     return {"ready": not missing, "exe": exe, "model": model, "missing": missing, "custom": custom_dir or None}
 
 
@@ -71,6 +83,8 @@ async def install(installer, root, custom_dir=None):
     import zipfile
     root = Path(root)
     found = locate(root, custom_dir)
+    if not found["exe"] and engine.IS_MAC:
+        raise RuntimeError("В программе не найден whisper-cli: переустановите приложение")
     if not found["exe"]:
         zpath = root / "downloads" / f"whisper-{WHISPER_BUILD}.zip"
         await installer.download(WHISPER_URL, zpath, "agent", "распознавание речи (программа)", WHISPER_ZIP_SIZE)

@@ -11,9 +11,11 @@ import threading
 import webbrowser
 from pathlib import Path
 
+import engine  # noqa: E402
+
 if getattr(sys, "frozen", False):
     # installed app: keep user data outside the program folder so updates do not touch it
-    os.environ.setdefault("H3STUDIO_DATA", str(Path(os.environ["LOCALAPPDATA"]) / "MinimaxH3Workspace" / "data"))
+    os.environ.setdefault("H3STUDIO_DATA", str(engine.app_data_dir() / "data"))
 
 from aiohttp import web  # noqa: E402
 
@@ -132,8 +134,8 @@ def main():
         api = JsApi(port)
         api._window = webview.create_window("Minimax H3 Workspace", url, width=1440, height=920, min_size=(1000, 680),
                                            background_color="#12070a", js_api=api)
-        webview.start(gui="edgechromium", private_mode=False,
-                      storage_path=os.path.join(os.environ.get("LOCALAPPDATA", "."), "MinimaxH3Workspace", "webview"))
+        webview.start(gui=None if engine.IS_MAC else "edgechromium", private_mode=False,
+                      storage_path=str(engine.app_data_dir() / "webview"))
     except Exception:
         # no WebView2: use the browser and keep running until the console/process is closed
         webbrowser.open(url)

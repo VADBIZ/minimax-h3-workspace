@@ -4,6 +4,8 @@ Nothing here needs extra packages: CPU load comes from GetSystemTimes, RAM from 
 """
 
 import ctypes
+import os
+import re
 import shutil
 import subprocess
 import time
@@ -37,12 +39,57 @@ def _num(text):
         return None  # "[N/A]" and the like
 
 
+def _mac_cpu():
+    # sum of per-process load from ps, scaled to all cores
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "%cpu="], capture_output=True, text=True, timeout=4).stdout
+        total = sum(_num(x) or 0 for x in out.split())
+        return round(min(100.0, total / (os.cpu_count() or 1)), 1)
+    except Exception:
+        return None
+
+
+def _mac_ram():
+    try:
+        total = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=4).stdout)
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=4).stdout
+    except Exception:
+        return None
+    page = int(re.search(r"page size of (\d+)", out).group(1)) if "page size of" in out else 16384
+    pages = {k.strip(): int(v.strip().rstrip(".")) for k, v in re.findall(r"^([^:\n]+):\s+(\d+)\.?$", out, re.M)}
+    # what Activity Monitor calls "memory used": app memory + wired + compressed
+    used = (pages.get("Anonymous pages", 0) - pages.get("Pages purgeable", 0) + pages.get("Pages wired down", 0)
+            + pages.get("Pages occupied by compressor", 0)) * page
+    return {"total_gb": round(total / GB, 1), "used_gb": round(used / GB, 1)}
+
+
+def _mac_gpu():
+    # the Apple GPU reports its load to the IORegistry; it has no memory of its own (it uses the RAM)
+    try:
+        out = subprocess.run(["ioreg", "-r", "-d", "1", "-c", "IOAccelerator"], capture_output=True, text=True,
+                             timeout=4).stdout
+    except Exception:
+        return None
+    util = re.search(r'"Device Utilization %"\s*=\s*(\d+)', out)
+    model = re.search(r'"model"\s*=\s*"([^"]+)"', out)
+    return {"name": (model.group(1) if model else "Apple") + " GPU", "shared": True,
+            "util": float(util.group(1)) if util else None}
+
+
+def _mac_volume(p):
+    # "/Volumes/T7/..." -> "T7"; the startup disk needs no name (a long path does not fit the sidebar)
+    parts = p.resolve().parts
+    return parts[2] if len(parts) > 2 and parts[1] == "Volumes" else ""
+
+
 class Monitor:
     def __init__(self):
         self._cpu_prev = None
         self._cache, self._at = None, 0.0
 
     def cpu_percent(self):
+        if engine.IS_MAC:
+            return _mac_cpu()
         idle, kernel, user = _FileTime(), _FileTime(), _FileTime()
         if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
             return None
@@ -54,6 +101,8 @@ class Monitor:
 
     @staticmethod
     def ram():
+        if engine.IS_MAC:
+            return _mac_ram()
         m = _MemStatus(dwLength=ctypes.sizeof(_MemStatus))
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
         total = m.ullTotalPhys / GB
@@ -61,6 +110,8 @@ class Monitor:
 
     @staticmethod
     def gpu():
+        if engine.IS_MAC:
+            return _mac_gpu()
         try:
             out = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit",
@@ -87,7 +138,8 @@ class Monitor:
             u = shutil.disk_usage(p)
         except OSError:
             return None
-        return {"free_gb": round(u.free / GB), "total_gb": round(u.total / GB), "drive": p.drive or str(p)}
+        return {"free_gb": round(u.free / GB), "total_gb": round(u.total / GB),
+                "drive": _mac_volume(p) if engine.IS_MAC else p.drive or str(p)}
 
     def sample(self, disk_path):
         """At most one reading per second, however many windows ask."""

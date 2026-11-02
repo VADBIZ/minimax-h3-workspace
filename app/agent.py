@@ -7,9 +7,11 @@ app/skills, the user's own are uploaded into data/skills. Each skill is "always"
 
 import asyncio
 import json
+import platform
 import re
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -18,7 +20,10 @@ import aiohttp
 import engine
 
 LLAMA_BUILD = "b11985"
-LLAMA_URL = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_BUILD}/llama-{LLAMA_BUILD}-bin-win-vulkan-x64.zip"
+_LLAMA_ASSET = ("macos-" + ("arm64" if platform.machine() == "arm64" else "x64") + ".tar.gz") if engine.IS_MAC \
+    else "win-vulkan-x64.zip"
+LLAMA_URL = f"https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_BUILD}/llama-{LLAMA_BUILD}-bin-{_LLAMA_ASSET}"
+LLAMA_EXE = "llama-server" + engine.EXE
 
 HF = "https://huggingface.co/{repo}/resolve/main/{path}"
 LLM_VARIANTS = {
@@ -40,8 +45,15 @@ DEFAULT_SKILL_SETTINGS = {
 }
 
 
+def gpu_memory_gb(hw):
+    """Video memory for the model; on a Mac the GPU uses the shared RAM (macOS gives it about two thirds)."""
+    if hw.get("mac"):
+        return round((hw.get("ram_gb") or 0) * 0.66)
+    return hw.get("vram_gb") or 0
+
+
 def pick_variant(hw):
-    return "gemma4-12b" if (hw.get("vram_gb") or 0) >= 12 else "gemma4-e4b"
+    return "gemma4-12b" if gpu_memory_gb(hw) >= 12 else "gemma4-e4b"
 
 
 def parse_frontmatter(text):
@@ -271,7 +283,7 @@ class LlamaServer:
         self.custom = None  # {"model": path, "mmproj": path|None} when the user points to their own GGUF
 
     def exe(self):
-        hits = list((self.root / "llama.cpp").rglob("llama-server.exe")) if (self.root / "llama.cpp").exists() else []
+        hits = list((self.root / "llama.cpp").rglob(LLAMA_EXE)) if (self.root / "llama.cpp").exists() else []
         return hits[0] if hits else None
 
     def model_paths(self, variant):
@@ -337,11 +349,16 @@ async def install(installer, root, variant, runtime_only=False, whisper_dir=None
     """Download llama.cpp (Vulkan build, works on any NVIDIA/AMD card) and, unless the user has their own, Gemma."""
     root = Path(root)
     llama_dir = root / "llama.cpp"
-    if not (llama_dir.exists() and list(llama_dir.rglob("llama-server.exe"))):
-        zpath = root / "downloads" / f"llama-{LLAMA_BUILD}.zip"
+    if not (llama_dir.exists() and list(llama_dir.rglob(LLAMA_EXE))):
+        zpath = root / "downloads" / LLAMA_URL.rsplit("/", 1)[1]
         await installer.download(LLAMA_URL, zpath, "agent", "llama.cpp", 37e6)
-        with zipfile.ZipFile(zpath) as z:
-            z.extractall(llama_dir)
+        if zpath.name.endswith(".tar.gz"):
+            # tar keeps the executable bits and the dylib symlinks the Mac build needs
+            with tarfile.open(zpath) as t:
+                t.extractall(llama_dir, filter="tar")
+        else:
+            with zipfile.ZipFile(zpath) as z:
+                z.extractall(llama_dir)
         zpath.unlink(missing_ok=True)
     import speech
     await speech.install(installer, root, whisper_dir)  # words from audio + voice input (~200 MB)

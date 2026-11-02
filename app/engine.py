@@ -23,6 +23,25 @@ import aiohttp
 import catalog
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+IS_MAC = sys.platform == "darwin"
+EXE = ".exe" if sys.platform == "win32" else ""
+
+MAC_NO_LOCAL = ("На Маке ComfyUI с моделью MiniMax H3 не работает: ей нужна видеокарта NVIDIA. "
+                "Выберите «Только облако» (RunningHub) или подключитесь к ComfyUI на компьютере с NVIDIA.")
+
+
+def app_data_dir():
+    """Where the installed app keeps settings, logs and the agent's files."""
+    if IS_MAC:
+        return Path.home() / "Library" / "Application Support" / "MinimaxH3Workspace"
+    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MinimaxH3Workspace"
+
+
+def _sysctl(name):
+    try:
+        return subprocess.run(["sysctl", "-n", name], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
 
 
 # ---------- config ----------
@@ -48,7 +67,18 @@ class Config:
 # ---------- hardware ----------
 
 def detect_hardware(install_dir=None):
-    hw = {"nvidia": False, "gpu": None, "vram_gb": 0, "compute_cap": 0, "ram_gb": 0, "disk_free_gb": None}
+    hw = {"nvidia": False, "gpu": None, "vram_gb": 0, "compute_cap": 0, "ram_gb": 0, "disk_free_gb": None,
+          "mac": IS_MAC}
+    if IS_MAC:
+        # Apple chips share one memory between CPU and GPU: there is no separate video memory
+        hw["gpu"] = _sysctl("machdep.cpu.brand_string") or "Apple"
+        try:
+            hw["ram_gb"] = round(int(_sysctl("hw.memsize")) / 1024 ** 3)
+        except ValueError:
+            pass
+        if install_dir:
+            hw["disk_free_gb"] = disk_free_gb(install_dir)
+        return hw
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"],
@@ -90,6 +120,8 @@ def disk_free_gb(path):
 
 
 def default_install_dir():
+    if IS_MAC:
+        return str(app_data_dir())
     # biggest fixed drive other than C: if there is one, else the user's local app data
     best, best_free = None, 0
     for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
@@ -184,6 +216,8 @@ class Installer:
         part.replace(dest)
 
     async def install_comfy(self, install_dir):
+        if IS_MAC:
+            raise RuntimeError(MAC_NO_LOCAL)
         root = Path(install_dir) / catalog.COMFY_DIRNAME
         if (root / "python_embeded" / "python.exe").exists():
             await self.step("comfy", "done", label="ComfyUI уже установлен")

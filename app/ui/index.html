@@ -749,7 +749,7 @@ details[open] summary::before{content:'－ '}
             </details>
             <details id="agWh" style="margin-top:8px">
               <summary>У меня уже есть whisper — указать папку</summary>
-              <div class="hint" style="margin:8px 0">Папка с программой <b>whisper-cli.exe</b> и/или моделью <b>ggml-….bin</b> (многоязычной, не «.en»). Что найдётся — будет использовано, недостающее приложение скачает отдельно.</div>
+              <div class="hint" style="margin:8px 0">Папка с программой <b>whisper-cli</b> и/или моделью <b>ggml-….bin</b> (многоязычной, не «.en»). Что найдётся — будет использовано, недостающее приложение скачает отдельно.</div>
               <div class="path on"><input id="agWhDir" spellcheck="false" placeholder="D:\Tools\whisper"><button class="btn" data-pick="agWhDir">Обзор…</button></div>
               <div class="hint" id="agWhInfo" style="margin-top:6px"></div>
               <div class="wz-go" style="margin-top:8px"><button class="btn" id="agWhReset" hidden>Вернуть встроенный whisper</button><button class="btn pri" id="agWhUse">Подключить</button></div>
@@ -968,7 +968,7 @@ details[open] summary::before{content:'－ '}
 <div class="modal" id="confirm" hidden>
   <div class="box confirm">
     <h3 id="cfTitle">Удалить видео?</h3>
-    <p id="cfText">Файл переместится в корзину Windows.</p>
+    <p id="cfText">Файл переместится в корзину.</p>
     <div class="v-btns">
       <button class="btn" data-close>Отмена</button>
       <button class="btn danger" id="cfOk">Удалить</button>
@@ -1035,7 +1035,9 @@ async function pollSystem() {
     if (gpu) {
       $('#gpuName').textContent = gpu.name;
       meter('#gpuLoad', '#gpuBar', gpu.util, gpu.util != null ? `${Math.round(gpu.util)} %` : '—');
-      meter('#vramTxt', '#vramBar', gpu.vram_used_gb / gpu.vram_total_gb * 100, `${g1(gpu.vram_used_gb)} / ${g1(gpu.vram_total_gb)} ГБ`);
+      // Apple chips: the GPU uses the RAM shown below, so there is no separate video memory meter
+      $('#vramTxt').closest('.meter').style.display = gpu.shared ? 'none' : '';
+      if (!gpu.shared) meter('#vramTxt', '#vramBar', gpu.vram_used_gb / gpu.vram_total_gb * 100, `${g1(gpu.vram_used_gb)} / ${g1(gpu.vram_total_gb)} ГБ`);
       $('#tempRow').hidden = gpu.temp == null; if (gpu.temp != null) $('#gpuTemp').textContent = `${Math.round(gpu.temp)} °C`;
       $('#powerRow').hidden = gpu.power == null;
       if (gpu.power != null) $('#gpuPower').textContent = `${Math.round(gpu.power)}` + (gpu.power_limit ? ` / ${Math.round(gpu.power_limit)}` : '') + ' Вт';
@@ -1831,7 +1833,9 @@ function stop() {
 const GB = b => b < 1e9 ? Math.round(b / 1e6) + ' МБ' : (b / 1e9).toFixed(1).replace(/\.0$/, '') + ' ГБ';
 const MODE_ORDER = ['video', 'lipsync', 'refs', 'actor', 'action'];
 // start with one mode: a full set is ~100 GB, most people need one task to begin with
-let setupInfo = null, setupOpt = 'new', setupProfile = null, setupModes = ['video'];
+const IS_MAC = /Mac/.test(navigator.platform || navigator.userAgent);
+const TRASH = IS_MAC ? 'Корзину' : 'корзину Windows';
+let setupInfo = null, setupOpt = IS_MAC ? 'cloud' : 'new', setupProfile = null, setupModes = ['video'];
 const SETUP_STEPS = [['comfy', 'ComfyUI'], ['nodes', 'Ноды'], ['start', 'Запуск ComfyUI'], ['models', 'Модели']];
 
 function setStep(n) {
@@ -1859,7 +1863,7 @@ async function openSetup() {
   const hw = setupInfo.hardware, c = setupInfo.config;
   // before setup ComfyUI may not exist yet, so the sidebar shows the detected card instead
   $('#hwGrid').innerHTML = [
-    ['Видеокарта', hw.nvidia ? hw.gpu : 'не найдена NVIDIA'], ['Видеопамять', hw.vram_gb ? hw.vram_gb + ' ГБ' : '—'],
+    [hw.mac ? 'Процессор' : 'Видеокарта', hw.nvidia || hw.mac ? hw.gpu : 'не найдена NVIDIA'], ['Видеопамять', hw.vram_gb ? hw.vram_gb + ' ГБ' : hw.mac ? 'общая с ОЗУ' : '—'],
     ['Оперативная память', hw.ram_gb + ' ГБ'], ['Свободно на диске', hw.disk_free_gb != null ? hw.disk_free_gb + ' ГБ' : '—'],
   ].map(([k, v]) => `<div><small>${k}</small><b>${esc(String(v))}</b></div>`).join('');
   const V = { ok: ['ok', 'Подходит'], weak: ['weak', 'Будет работать медленно'], unsupported: ['unsupported', 'Не подходит'] }[setupInfo.verdict];
@@ -1911,6 +1915,8 @@ function pickOpt(opt) {
   $('#wzErr').textContent = '';
 }
 $$('#wzChoose .opt').forEach(o => o.onclick = () => pickOpt(o.dataset.opt));
+// a Mac has no NVIDIA card: the local install is not offered there
+if (IS_MAC) { $('#wzChoose .opt[data-opt="new"]').style.display = 'none'; $('#wzChoose .choose').classList.remove('three'); }
 $('#instDir').onchange = () => openSetup();
 $$('[data-pick]').forEach(b => b.onclick = async () => {
   if (!window.pywebview?.api?.pick_folder) { $('#' + b.dataset.pick).focus(); toast('Впишите путь к папке вручную'); return; }
@@ -2220,7 +2226,7 @@ async function saveItems(items) {
 }
 function askDelete(ids) {
   $('#cfTitle').textContent = ids.length === 1 ? 'Удалить видео?' : `Удалить ${ids.length} видео?`;
-  $('#cfText').textContent = 'Файлы переместятся в корзину Windows — их можно будет восстановить.';
+  $('#cfText').textContent = `Файлы переместятся в ${TRASH} — их можно будет восстановить.`;
   $('#confirm').hidden = false;
   $('#cfOk').onclick = async () => {
     if (API) {
@@ -2603,7 +2609,7 @@ $('#agMic').onclick = async () => {
   if (needSpeech()) return;
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch { toast('Нет доступа к микрофону. Разрешите его в окне Windows или подключите микрофон.'); return; }
+  catch { toast(IS_MAC ? 'Нет доступа к микрофону. Разрешите его: Системные настройки → Конфиденциальность и безопасность → Микрофон.' : 'Нет доступа к микрофону. Разрешите его в окне Windows или подключите микрофон.'); return; }
   const chunks = [], mr = new MediaRecorder(stream), t0 = Date.now(), btn = $('#agMic');
   micRec = mr; btn.classList.add('rec');
   const tick = () => { btn.title = `Идёт запись ${Math.round((Date.now() - t0) / 1000)} с — нажмите, чтобы закончить`; };

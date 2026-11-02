@@ -211,7 +211,11 @@ def choose_models(hw, profile=None):
         choice["fast_unet"] = "nvfp4"
         notes.append("Видеокарта RTX 50-й серии: для генерации видео берём версию NVFP4 — она легче и быстрее на этих картах.")
 
-    if vram < 8 or not hw.get("nvidia"):
+    if hw.get("mac"):
+        verdict = "unsupported"
+        notes.insert(0, "Мак: локальная генерация недоступна, ей нужна видеокарта NVIDIA. Генерируйте в облаке RunningHub "
+                        "или подключитесь к ComfyUI на компьютере с NVIDIA. Агент для промптов работает на Маке.")
+    elif vram < 8 or not hw.get("nvidia"):
         verdict = "unsupported"
         notes.insert(0, "Нужна видеокарта NVIDIA минимум с 8 ГБ памяти.")
     elif vram < 12 or ram < 32:
